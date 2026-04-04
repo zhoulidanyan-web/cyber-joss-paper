@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+<title>清明·焚纸祭思</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body, #root {
+    width: 100%; height: 100%;
+    overflow: hidden;
+    background: #080808;
+    touch-action: none;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+</style>
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useRef, useEffect, useCallback } = React;
+
+/* ═══════════════════════════════════════════
+   火焰粒子 — 每张纸钱持续发射的小火舌
+   ═══════════════════════════════════════════ */
+class FlameParticle {
+  constructor(x, y, size) {
+    const spread = size * 0.45;
+    this.x = x + (Math.random() - 0.5) * spread;
+    this.y = y + (Math.random() - 0.3) * spread * 0.4;
+    this.baseSize = (5 + Math.random() * 8) * (size / 36);
+    this.curSize = this.baseSize;
+    this.vx = (Math.random() - 0.5) * 0.5;
+    this.vy = -(1.2 + Math.random() * 2.2);
+    this.life = 1.0;
+    this.decay = 0.015 + Math.random() * 0.02;
+    this.wobbleAmp = 0.4 + Math.random() * 0.8;
+    this.wobbleFreq = 0.04 + Math.random() * 0.07;
+    this.wobblePhase = Math.random() * Math.PI * 2;
+    this.age = 0;
+  }
+
+  update() {
+    this.age++;
+    this.life -= this.decay;
+    this.x += this.vx + Math.sin(this.age * this.wobbleFreq + this.wobblePhase) * this.wobbleAmp;
+    this.y += this.vy;
+    this.vy *= 0.985;
+    this.curSize = this.baseSize * Math.max(0, this.life);
+    return this.life > 0;
+  }
+
+  draw(ctx) {
+    if (this.curSize < 0.5) return;
+    const t = 1 - this.life; // 0=young, 1=dying
+
+    // 火焰颜色随生命周期变化：白芯→亮黄→橙→红→暗红
+    let r, g, b, a;
+    if (t < 0.15) {
+      // 白芯
+      r = 255; g = 255; b = 220;
+      a = this.life * 0.7;
+    } else if (t < 0.35) {
+      // 亮黄
+      const p = (t - 0.15) / 0.2;
+      r = 255; g = Math.round(255 - p * 60); b = Math.round(220 - p * 170);
+      a = this.life * 0.65;
+    } else if (t < 0.65) {
+      // 橙
+      const p = (t - 0.35) / 0.3;
+      r = 255; g = Math.round(195 - p * 95); b = Math.round(50 - p * 30);
+      a = this.life * 0.55;
+    } else {
+      // 红→暗红
+      const p = (t - 0.65) / 0.35;
+      r = Math.round(255 - p * 100); g = Math.round(100 - p * 70); b = Math.round(20 - p * 15);
+      a = this.life * 0.4;
+    }
+
+    // 绘制火焰泪滴形状
+    const s = this.curSize;
+    const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, s);
+    grad.addColorStop(0, `rgba(${r},${g},${b},${a})`);
+    grad.addColorStop(0.4, `rgba(${r},${g},${b},${a * 0.6})`);
+    grad.addColorStop(1, `rgba(${r},${Math.max(0,g-40)},${Math.max(0,b-10)},0)`);
+
+    ctx.save();
+    ctx.translate(this.x, this.y);
+
+    // 泪滴形 — 上窄下宽
+    ctx.beginPath();
+    ctx.moveTo(0, -s * 1.6);
+    ctx.bezierCurveTo(s * 0.5, -s * 0.8, s, s * 0.2, 0, s * 0.6);
+    ctx.bezierCurveTo(-s, s * 0.2, -s * 0.5, -s * 0.8, 0, -s * 1.6);
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    ctx.restore();
+  }
+}
+
+/* ═══════════════════════════════════════════
+   火星/余烬粒子 — 小亮点飞散
+   ═══════════════════════════════════════════ */
+class EmberParticle {
+  constructor(x, y, size) {
+    this.x = x + (Math.random() - 0.5) * size * 0.4;
+    this.y = y + (Math.random() - 0.5) * size * 0.3;
+    this.size = 0.8 + Math.random() * 1.8;
+    this.vx = (Math.random() - 0.5) * 1.5;
+    this.vy = -(1 + Math.random() * 2.5);
+    this.gravity = 0.01 + Math.random() * 0.02;
+    this.life = 1.0;
+    this.decay = 0.008 + Math.random() * 0.015;
+    this.brightness = 0.6 + Math.random() * 0.4;
+  }
+
+  update() {
+    this.life -= this.decay;
+    this.x += this.vx;
+    this.y += this.vy;
+    this.vy += this.gravity;
+    this.vx *= 0.995;
+    return this.life > 0;
+  }
+
+  draw(ctx) {
+    const a = this.life * this.brightness;
+    const t = 1 - this.life;
+    const r = 255;
+    const g = Math.round(200 - t * 120);
+    const b = Math.round(80 - t * 60);
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.size * this.life, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(${r},${g},${b},${a})`;
+    ctx.fill();
+  }
+}
+
+/* ═══════════════════════════════════════════
+   烟灰粒子 — 燃尽后的灰烬
+   ═══════════════════════════════════════════ */
+class AshParticle {
+  constructor(x, y) {
+    this.x = x + (Math.random() - 0.5) * 15;
+    this.y = y;
+    this.size = 1 + Math.random() * 2.5;
+    this.vx = (Math.random() - 0.5) * 0.6;
+    this.vy = -(0.3 + Math.random() * 0.8);
+    this.life = 1.0;
+    this.decay = 0.004 + Math.random() * 0.006;
+    this.swayPhase = Math.random() * Math.PI * 2;
+    this.age = 0;
+  }
+
+  update() {
+    this.age++;
+    this.life -= this.decay;
+    this.x += this.vx + Math.sin(this.age * 0.02 + this.swayPhase) * 0.25;
+    this.y += this.vy;
+    this.size *= 0.9995;
+    return this.life > 0;
+  }
+
+  draw(ctx) {
+    const a = this.life * 0.25;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(100, 70, 40, ${a})`;
+    ctx.fill();
+  }
+}
+
+/* ═══════════════════════════════════════════
+   纸钱 — 带逼真燃烧效果
+   ═══════════════════════════════════════════ */
+class JossPaper {
+  constructor(x, y) {
+    this.x = x + (Math.random() - 0.5) * 60;
+    this.y = y + (Math.random() - 0.5) * 40;
+    this.size = 44 + Math.random() * 20;
+    this.rotation = Math.random() * Math.PI * 2;
+    this.rotSpeed = (Math.random() - 0.5) * 0.015;
+    this.vx = (Math.random() - 0.5) * 0.5;
+    this.vy = -(0.25 + Math.random() * 0.45);
+    this.swayAmp = 0.2 + Math.random() * 0.4;
+    this.swayFreq = 0.006 + Math.random() * 0.01;
+    this.swayPhase = Math.random() * Math.PI * 2;
+    this.life = 1.0;
+    this.decay = 0.001 + Math.random() * 0.0008;
+    this.burnEdge = 0;
+    this.flickerOffset = Math.random() * 1000;
+    this.age = 0;
+
+    // 每张纸钱的燃烧起始点不同（随机角度）
+    this.burnOrigin = Math.random() * Math.PI * 2;
+    // 不规则边缘噪声种子
+    this.edgeNoise = Array.from({length: 16}, () => Math.random() * 0.3 + 0.85);
+  }
+
+  update(flames, embers, ashes) {
+    this.age++;
+    this.life -= this.decay;
+    this.burnEdge = Math.min(1, (1 - this.life) * 1.4);
+
+    this.x += this.vx + Math.sin(this.age * this.swayFreq + this.swayPhase) * this.swayAmp;
+    this.y += this.vy;
+    this.rotation += this.rotSpeed;
+
+    // 生成火焰粒子
+    if (this.burnEdge > 0.05) {
+      const intensity = Math.min(1, this.burnEdge * 2) * (this.life > 0.15 ? 1 : this.life / 0.15);
+      const count = Math.random() < intensity * 0.85 ? (Math.random() < 0.3 ? 2 : 1) : 0;
+      for (let i = 0; i < count; i++) {
+        flames.push(new FlameParticle(this.x, this.y, this.size));
+      }
+      // 火星
+      if (Math.random() < intensity * 0.12) {
+        embers.push(new EmberParticle(this.x, this.y, this.size));
+      }
+    }
+
+    // 烟灰
+    if (this.burnEdge > 0.3 && Math.random() < 0.04) {
+      ashes.push(new AshParticle(this.x, this.y - this.size * 0.3));
+    }
+
+    if (this.life < 0.25) {
+      this.size *= 0.996;
+      this.vy *= 0.998;
+    }
+
+    return this.life > 0 && this.size > 2;
+  }
+
+  draw(ctx, time) {
+    const s = this.size;
+    const alpha = Math.min(1, this.life * 2.5);
+    const burnT = this.burnEdge;
+
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.rotation);
+
+    // ── 背景光晕（暖色环境光）──
+    const glowR = s * (2.5 + burnT * 3.0);
+    const glowA = alpha * 0.15 * Math.min(1, burnT * 3);
+    if (glowA > 0.005) {
+      const glow = ctx.createRadialGradient(0, 0, s * 0.2, 0, 0, glowR);
+      glow.addColorStop(0, `rgba(255, 140, 30, ${glowA})`);
+      glow.addColorStop(0.4, `rgba(255, 80, 15, ${glowA * 0.4})`);
+      glow.addColorStop(1, 'rgba(180, 40, 5, 0)');
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(0, 0, glowR, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // ── 纸钱主体 — 不规则燃烧边缘 ──
+    const segments = 48;
+    const outerR = s * 0.5;
+
+    // 绘制纸钱形状（带不规则燃烧边缘）
+    ctx.beginPath();
+    for (let i = 0; i <= segments; i++) {
+      const angle = (i / segments) * Math.PI * 2;
+
+      // 不规则边缘：根据角度与燃烧起点的距离计算燃烧深度
+      const angleDist = Math.abs(((angle - this.burnOrigin + Math.PI * 3) % (Math.PI * 2)) - Math.PI) / Math.PI;
+      const noiseIdx = i % this.edgeNoise.length;
+      const noise = this.edgeNoise[noiseIdx];
+
+      // 燃烧从起始点逐渐蔓延
+      const localBurn = Math.max(0, burnT * 1.8 - angleDist * 0.6) * noise;
+      const r = outerR * (1 - localBurn * 0.4);
+
+      const px = Math.cos(angle) * r;
+      const py = Math.sin(angle) * r;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+
+    // 纸钱填充 — 从金黄中心到碳化边缘
+    const paperGrad = ctx.createRadialGradient(0, 0, s * 0.05, 0, 0, outerR);
+    // 中心金色（随燃烧逐渐暗淡）
+    const cGold = {
+      r: Math.round(238 - burnT * 80),
+      g: Math.round(195 - burnT * 100),
+      b: Math.round(50 - burnT * 30)
+    };
+    // 边缘碳化色
+    const cEdge = {
+      r: Math.round(80 - burnT * 50),
+      g: Math.round(35 - burnT * 20),
+      b: Math.round(10)
+    };
+    paperGrad.addColorStop(0, `rgba(${cGold.r},${cGold.g},${cGold.b},${alpha})`);
+    paperGrad.addColorStop(0.55, `rgba(${Math.round((cGold.r+cEdge.r)/2)},${Math.round((cGold.g+cEdge.g)/2)},${Math.round((cGold.b+cEdge.b)/2)},${alpha})`);
+    paperGrad.addColorStop(0.85, `rgba(${cEdge.r},${cEdge.g},${cEdge.b},${alpha * 0.9})`);
+    paperGrad.addColorStop(1, `rgba(${Math.max(0,cEdge.r-20)},${Math.max(0,cEdge.g-10)},5,${alpha * 0.7})`);
+    ctx.fillStyle = paperGrad;
+    ctx.fill();
+
+    // ── 燃烧边缘发光线 ──
+    if (burnT > 0.05) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+
+      // 沿边缘绘制炽热发光
+      for (let i = 0; i < segments; i++) {
+        const angle = (i / segments) * Math.PI * 2;
+        const angleDist = Math.abs(((angle - this.burnOrigin + Math.PI * 3) % (Math.PI * 2)) - Math.PI) / Math.PI;
+        const noiseIdx = i % this.edgeNoise.length;
+        const localBurn = Math.max(0, burnT * 1.8 - angleDist * 0.6) * this.edgeNoise[noiseIdx];
+
+        // 只在燃烧前缘发光（不是已经完全碳化的部分）
+        if (localBurn > 0.05 && localBurn < 0.9) {
+          const edgeIntensity = Math.sin(localBurn * Math.PI) * 0.8; // 前缘最亮
+          const r = outerR * (1 - localBurn * 0.4);
+          const ex = Math.cos(angle) * r;
+          const ey = Math.sin(angle) * r;
+          const glowSize = s * 0.12 * edgeIntensity;
+
+          const flick = Math.sin(time * 0.015 + i * 0.7 + this.flickerOffset) * 0.2 + 0.8;
+          const eA = edgeIntensity * alpha * flick * 0.7;
+
+          const eGrad = ctx.createRadialGradient(ex, ey, 0, ex, ey, glowSize);
+          eGrad.addColorStop(0, `rgba(255, 220, 140, ${eA})`);
+          eGrad.addColorStop(0.3, `rgba(255, 160, 40, ${eA * 0.6})`);
+          eGrad.addColorStop(1, `rgba(200, 60, 10, 0)`);
+          ctx.fillStyle = eGrad;
+          ctx.beginPath();
+          ctx.arc(ex, ey, glowSize, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+      ctx.restore();
+    }
+
+    // ── 中心方孔 ──
+    const holeSize = s * 0.12;
+    const holeAlpha = alpha * Math.max(0, 1 - burnT * 1.2);
+    if (holeAlpha > 0.02) {
+      ctx.save();
+      ctx.rotate(Math.PI / 4);
+      ctx.beginPath();
+      ctx.rect(-holeSize, -holeSize, holeSize * 2, holeSize * 2);
+      ctx.fillStyle = `rgba(8, 6, 4, ${holeAlpha})`;
+      ctx.fill();
+      // 方孔边框
+      ctx.strokeStyle = `rgba(${160 - burnT * 80}, ${110 - burnT * 60}, 25, ${holeAlpha * 0.4})`;
+      ctx.lineWidth = 0.8;
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    // ── 纹饰 ──
+    if (burnT < 0.7) {
+      const ornAlpha = alpha * (1 - burnT * 1.3) * 0.3;
+      if (ornAlpha > 0.02) {
+        // 外圈
+        ctx.beginPath();
+        ctx.arc(0, 0, s * 0.48, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(190, 150, 40, ${ornAlpha})`;
+        ctx.lineWidth = 0.7;
+        ctx.stroke();
+        // 内圈
+        ctx.beginPath();
+        ctx.arc(0, 0, s * 0.3, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(170, 130, 30, ${ornAlpha * 0.7})`;
+        ctx.lineWidth = 0.5;
+        ctx.stroke();
+      }
+    }
+
+    ctx.restore();
+  }
+}
+
+/* ═══════════════════════════════════════════
+   主组件
+   ═══════════════════════════════════════════ */
+function App() {
+  const canvasRef = useRef(null);
+  const stateRef = useRef({
+    papers: [],
+    flames: [],
+    embers: [],
+    ashes: [],
+    pressing: false,
+    pressX: 0,
+    pressY: 0,
+    spawnTimer: 0,
+    animId: 0,
+  });
+
+  const getPos = useCallback((e) => {
+    if (e.touches && e.touches.length > 0) {
+      return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    }
+    return { x: e.clientX, y: e.clientY };
+  }, []);
+
+  const onDown = useCallback((e) => {
+    e.preventDefault();
+    const pos = getPos(e);
+    const s = stateRef.current;
+    s.pressing = true;
+    s.pressX = pos.x * window.devicePixelRatio;
+    s.pressY = pos.y * window.devicePixelRatio;
+  }, [getPos]);
+
+  const onMove = useCallback((e) => {
+    if (!stateRef.current.pressing) return;
+    const pos = getPos(e);
+    stateRef.current.pressX = pos.x * window.devicePixelRatio;
+    stateRef.current.pressY = pos.y * window.devicePixelRatio;
+  }, [getPos]);
+
+  const onUp = useCallback(() => {
+    stateRef.current.pressing = false;
+  }, []);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    const dpr = window.devicePixelRatio || 1;
+
+    const resize = () => {
+      canvas.width = window.innerWidth * dpr;
+      canvas.height = window.innerHeight * dpr;
+      canvas.style.width = window.innerWidth + 'px';
+      canvas.style.height = window.innerHeight + 'px';
+    };
+    resize();
+    window.addEventListener('resize', resize);
+
+    const s = stateRef.current;
+
+    const loop = (now) => {
+      s.animId = requestAnimationFrame(loop);
+
+      // 清除
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#080808';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      // 按压生成纸钱
+      if (s.pressing) {
+        s.spawnTimer += 16.67; // ~60fps
+        while (s.spawnTimer >= 130) {
+          s.spawnTimer -= 130;
+          s.papers.push(new JossPaper(s.pressX, s.pressY));
+        }
+      } else {
+        s.spawnTimer = 60; // 松开后下次按压立即生成第一张
+      }
+
+      // 更新纸钱（纸钱会向flames/embers/ashes数组推入粒子）
+      s.papers = s.papers.filter(p => p.update(s.flames, s.embers, s.ashes));
+
+      // 绘制纸钱主体（普通混合模式）
+      s.papers.forEach(p => p.draw(ctx, now));
+
+      // 切换到 additive blending 绘制所有火焰和火星
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+
+      s.flames = s.flames.filter(f => {
+        const alive = f.update();
+        if (alive) f.draw(ctx);
+        return alive;
+      });
+
+      s.embers = s.embers.filter(e => {
+        const alive = e.update();
+        if (alive) e.draw(ctx);
+        return alive;
+      });
+
+      ctx.restore();
+
+      // 烟灰 — 普通混合模式
+      s.ashes = s.ashes.filter(a => {
+        const alive = a.update();
+        if (alive) a.draw(ctx);
+        return alive;
+      });
+
+      // 底部提示
+      const fontSize = 14 * dpr;
+      ctx.font = `300 ${fontSize}px "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif`;
+      ctx.textAlign = 'center';
+      const hasContent = s.papers.length > 0 || s.flames.length > 0;
+      ctx.fillStyle = `rgba(140, 120, 90, ${hasContent ? 0.15 : 0.35})`;
+      ctx.fillText('长按屏幕 焚纸祭思', canvas.width / 2, canvas.height - 30 * dpr);
+    };
+
+    s.animId = requestAnimationFrame(loop);
+
+    return () => {
+      cancelAnimationFrame(s.animId);
+      window.removeEventListener('resize', resize);
+    };
+  }, []);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      onMouseDown={onDown}
+      onMouseMove={onMove}
+      onMouseUp={onUp}
+      onMouseLeave={onUp}
+      onTouchStart={onDown}
+      onTouchMove={onMove}
+      onTouchEnd={onUp}
+      onTouchCancel={onUp}
+      style={{ display: 'block', cursor: 'default' }}
+    />
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
